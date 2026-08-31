@@ -107,16 +107,21 @@ def shard_chunk_count(store: Path, name: str) -> int:
 # ── Siphon: equalize two peers at the bit level ──────────────────────────────
 def siphon_equalize(
     a_store: Path, b_store: Path, shard: str,
-    transport: Optional[Transport] = None,
+    transport_a: Optional[Transport] = None,
+    transport_b: Optional[Transport] = None,
 ) -> Dict[str, int]:
     """Make peer A and peer B equal for one shard by copying only differing
     chunks from the side that has them to the side that doesn't (or differs).
 
     Returns stats: chunks_compared, chunks_copied, bytes_copied.
     Disk-backed: only one chunk pair is in RAM at a time.
+
+    transport_a / transport_b let each side be a different link (e.g. A is local
+    disk, B is a remote NetworkTransport). If omitted, the side's own LocalTransport
+    is used.
     """
-    ta = transport or LocalTransport(a_store)
-    tb = transport or LocalTransport(b_store)
+    ta = transport_a or LocalTransport(a_store)
+    tb = transport_b or LocalTransport(b_store)
     n = max(shard_chunk_count(a_store, shard), shard_chunk_count(b_store, shard))
     stats = {"chunks_compared": 0, "chunks_copied": 0, "bytes_copied": 0}
     for i in range(n):
@@ -197,7 +202,7 @@ class SiphonPlan:
         if not self._done("siphon"):
             totals = {"chunks_copied": 0, "bytes_copied": 0}
             for s in self.shards:
-                st = siphon_equalize(self.a_store, self.b_store, s, self.transport)
+                st = siphon_equalize(self.a_store, self.b_store, s, self.transport, self.transport)
                 totals["chunks_copied"] += st["chunks_copied"]
                 totals["bytes_copied"] += st["bytes_copied"]
             report["siphon"] = totals
