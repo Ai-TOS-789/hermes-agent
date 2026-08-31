@@ -81,11 +81,29 @@ class Guardrail:
     def _interference(self) -> bool:
         return False
 
+    # ── root authority lock (Card + Trezor control the highest authority) ──
+    def _root_unlocked(self) -> bool:
+        """True if the human has NOT locked root authority.
+
+        ``roadmap/root_lock.json`` with ``{"locked": true}`` is the portable stand-in
+        for "Card/Trezor confirm the human has withdrawn root consent" — when present,
+        all autonomous action halts regardless of other gates. Absence = unlocked.
+        """
+        lock = self.office / "roadmap" / "root_lock.json"
+        if not lock.is_file():
+            return True
+        try:
+            return not bool(json.loads(lock.read_text(encoding="utf-8")).get("locked", False))
+        except Exception:
+            return True
+
     # ── the gate ───────────────────────────────────────────────────────────
     def may_proceed(self) -> bool:
         """True = safe to learn/act. False = HALT, ask human first."""
         reasons = []
         try:
+            if not self._root_unlocked():
+                reasons.append("root-locked")  # human withdrew root consent (Card/Trezor)
             if not self._anchor_present():
                 reasons.append("trust-anchor-missing")  # Trezor / ID card removed
             if self._interference():
