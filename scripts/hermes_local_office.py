@@ -20,6 +20,9 @@ Usage:
     python scripts/hermes_local_office.py init        # create folders on F:
     python scripts/hermes_local_office.py start       # background stream monitor
     python scripts/hermes_local_office.py supervise   # single control plane (self-healing)
+    python scripts/hermes_local_office.py full       # FULL OPTION: all subsystems, autonomous
+    python scripts/hermes_local_office.py trust-on   # declare trust anchor present (learn)
+    python scripts/hermes_local_office.py trust-off  # anchor removed -> HALT, await human
     python scripts/hermes_local_office.py once        # single snapshot to stdout
     python scripts/hermes_local_office.py stop        # remove status file
 
@@ -77,6 +80,48 @@ def cmd_supervise() -> int:
     return 0
 
 
+def cmd_trust_on() -> int:
+    """Declare the trust anchor present (Trezor / ID card plugged in). Enables
+    autonomous learning. On a host without real hardware, this file IS the anchor
+    the human controls — remove it (trust-off) to force an immediate halt."""
+    anchor = _OFFICE / "guardrail.trust_anchor_present"
+    anchor.write_text("1", encoding="utf-8")
+    print(f"[guardrail] trust anchor declared present: {anchor}")
+    print("[guardrail] autonomous learning may now proceed.")
+    return 0
+
+
+def cmd_trust_off() -> int:
+    """Declare the trust anchor MISSING (Trezor / ID card removed). Forces an
+    immediate halt of all autonomous learning — Hermes will await human input."""
+    anchor = _OFFICE / "guardrail.trust_anchor_present"
+    anchor.unlink(missing_ok=True)
+    print(f"[guardrail] trust anchor removed: {anchor}")
+    print("[guardrail] autonomous learning HALTED; awaiting human.")
+    return 0
+
+
+def cmd_full() -> int:
+    """Full Option: run every subsystem on this Windows box, autonomously.
+    GOOD->answer well, BAD->defend, LATE->defend anyway. Human watches."""
+    from agent.learning_node import LearningNode
+    from agent.siphon_supervisor import SiphonSupervisor
+    from agent.survival import build_full_option_survival
+
+    print("[full] Hermes Full Option — autonomous, you are watching.")
+    # 1) Autonomous learning node (root-level, learns by itself).
+    node = LearningNode(office=_OFFICE, cadence=60.0)
+    node.start()
+    # 2) Weight-mesh + block-handshake control plane (single supervisor).
+    sup = SiphonSupervisor(_OFFICE, shards=["w1", "w2"],
+                           hy3_stream_size_fn=_hy3_size)
+    sup_thr = sup.run_forever_background()
+    # 3) Survival layer (defends the whole stack).
+    survival = build_full_option_survival()
+    survival.run_forever()
+    return 0
+
+
 def main() -> int:
     action = (sys.argv[1] if len(sys.argv) > 1 else "once").lower()
     if action == "init":
@@ -85,6 +130,12 @@ def main() -> int:
         return cmd_start()
     if action == "supervise":
         return cmd_supervise()
+    if action == "full":
+        return cmd_full()
+    if action == "trust-on":
+        return cmd_trust_on()
+    if action == "trust-off":
+        return cmd_trust_off()
     if action == "stop":
         return cmd_stop()
     return cmd_once()

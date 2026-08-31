@@ -72,6 +72,17 @@ class LearningNode:
     # ── one autonomous learning tick ───────────────────────────────────────
     def _tick(self) -> Dict[str, object]:
         report: Dict[str, object] = {"ts": int(time.time())}
+        # GUARDRAIL: never learn/act if a hard-stop condition is active.
+        try:
+            from agent import guardrail as _gr
+            if not _gr.Guardrail(office=self.office).may_proceed():
+                report["guardrail"] = "HALTED"
+                report["guardrail_reason"] = _gr.Guardrail(office=self.office).reason()
+                return report
+        except Exception as e:  # probe error -> fail safe (halt)
+            report["guardrail"] = "HALTED"
+            report["guardrail_reason"] = f"probe-error:{e}"
+            return report
         # 1) Harvest the live Hy3 stream into the self-dialogue corpus.
         try:
             if self.harvest_fn is not None:

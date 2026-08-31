@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import time
+import threading
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -97,6 +98,11 @@ class SiphonSupervisor:
         except Exception:
             pass
         return status
+
+    def run_forever_background(self) -> threading.Thread:
+        t = threading.Thread(target=self.run_forever, daemon=True, name="siphon-supervisor")
+        t.start()
+        return t
 
     def run_forever(self) -> None:
         print(f"[supervisor] controlling mesh @ {self.mesh_root} every {self.tick}s")
