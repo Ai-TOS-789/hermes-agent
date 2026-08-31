@@ -18,7 +18,6 @@ import os as _os
 
 _REPO = Path(__file__).resolve().parent.parent
 _HERMES_HOME = Path(_os.environ.get("HERMES_HOME", r"C:\Users\w3ce\AppData\Local\hermes"))
-_HOME_SKILLS = _HERMES_HOME / "skills"
 
 
 def propose_and_install(category: str, name: str, office=None) -> dict:

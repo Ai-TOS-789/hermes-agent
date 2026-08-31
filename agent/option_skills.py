@@ -104,12 +104,7 @@ def discover_loop(office=None, cadence=300.0) -> None:
         time.sleep(cadence)
 
 
-def research_loop(office=None, cadence=600.0) -> None:
-    """Delegated multi-process worker: research goals (defined in agent/research_loop.py).
+# Re-export the real research loop so the conductor has one import surface
+# (agent/research_loop.py is the single implementation — no duplicated logic).
+from agent.research_loop import research_loop  # noqa: E402,F401
 
-    Kept here so the conductor (run_supervisor_processes) has a single import surface;
-    the real implementation lives in research_loop.py (Phase 3). Import is lazy so this
-    module loads even before research_loop.py exists.
-    """
-    from agent.research_loop import research_loop as _impl
-    _impl(office=office, cadence=cadence)

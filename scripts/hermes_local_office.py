@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import os
 import sys
+import json
+import time
 from pathlib import Path
 
 # Make repo root importable when run via `python scripts/...`.
@@ -101,6 +103,27 @@ def cmd_trust_off() -> int:
     return 0
 
 
+def cmd_root_lock() -> int:
+    """Withdraw root authority (Card/Trezor consent removed). All autonomous action
+    halts regardless of other gates until root-unlock. Human-controlled lock file."""
+    lock = _OFFICE / "roadmap" / "root_lock.json"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(json.dumps({"locked": True, "ts": int(time.time())}, indent=2), encoding="utf-8")
+    print(f"[guardrail] root authority LOCKED: {lock}")
+    print("[guardrail] all autonomous action halted; awaiting human (Card/Trezor) unlock.")
+    return 0
+
+
+def cmd_root_unlock() -> int:
+    """Restore root authority (Card/Trezor consent present). Re-enables autonomous
+    action subject to the other guardrail gates (trust anchor, interference)."""
+    lock = _OFFICE / "roadmap" / "root_lock.json"
+    lock.unlink(missing_ok=True)
+    print(f"[guardrail] root authority UNLOCKED: {lock} removed")
+    print("[guardrail] autonomous action may proceed (subject to other gates).")
+    return 0
+
+
 def cmd_full() -> int:
     """Full Option: run every subsystem on this Windows box, autonomously.
     GOOD->answer well, BAD->defend, LATE->defend anyway. Human watches."""
@@ -136,23 +159,19 @@ def main() -> int:
         return cmd_trust_on()
     if action == "trust-off":
         return cmd_trust_off()
+    if action == "root-lock":
+        return cmd_root_lock()
+    if action == "root-unlock":
+        return cmd_root_unlock()
     if action == "stop":
         return cmd_stop()
     if action == "conduct":
-        # Phase 5: launch the Option-Skills conductor (discover + research workers)
-        # as supervised multi-process workers under the learning node's wing.
-        from agent.learning_node import run_supervisor_processes
-        procs = run_supervisor_processes(office=_OFFICE)
-        for p in procs:
-            print(f"[conduct] started worker pid={p.pid} name={p.name}")
-        print(f"[conduct] {len(procs)} worker(s) running under guardrail; Ctrl-C to stop.")
-        try:
-            for p in procs:
-                p.join()
-        except KeyboardInterrupt:
-            for p in procs:
-                p.terminate()
-        return 0
+        # Phase 5+: launch the Option-Skills conductor workers with a health-check
+        # respawn loop (so a dead worker is revived automatically — no forced reboot,
+        # and it honors the guardrail halt). Uses hermes_autostart.run_supervisor_loop.
+        from scripts.hermes_autostart import run_supervisor_loop
+        print(f"[conduct] starting supervised workers under guardrail; Ctrl-C to stop.")
+        return run_supervisor_loop(cadence=15.0)
     return cmd_once()
 
 
