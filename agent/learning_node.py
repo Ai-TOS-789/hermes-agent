@@ -99,6 +99,17 @@ class LearningNode:
                 )
         except Exception as e:  # noqa: BLE001
             report["harvest_error"] = str(e)
+        # 1b) SELF-EXTEND: synthesize a +1 meta/insight from recent 0/-1 shards, AND
+        #     auto-cross-link it back to the shards it was derived from (+ connect 0
+        #     core facts to related prior facts). The node grows +1/0/-1 *and* wires
+        #     the pyramid together on its own — no human prompt required.
+        try:
+            from agent.model_forge import PyramidStore
+            store = PyramidStore()
+            synth = self._synthesize_and_link(store)
+            report["synthesized"] = synth
+        except Exception as e:  # noqa: BLE001
+            report["synthesize_error"] = str(e)
         # 2) Sensory perception (cognitive layer warm-up).
         try:
             if self.perceive_fn is not None:
@@ -165,11 +176,60 @@ class LearningNode:
         if self._thread:
             self._thread.join(timeout=5.0)
 
+    def _synthesize_and_link(self, store: "object") -> dict:
+        """Self-extend the pyramid on the node's own initiative.
+
+        - Adds a 0 core fact from the current tick (if any derived content exists).
+        - Synthesizes a +1 meta/insight summarizing recent 0/-1 shard counts.
+        - Auto-links the +1 insight back to recent 0/-1 shards it summarizes.
+        - Auto-links a recent 0 fact to related prior 0/-1 facts by token overlap.
+        Returns a summary of what was added/linked.
+        """
+        import json as _json
+        added = {}
+        # +1 meta/insight from current counts.
+        counts = {l: store.count(l) for l in ("+1", "0", "-1")}
+        meta_path = store.add("+1", {
+            "type": "synthesized-insight",
+            "topic": f"autonomous-tick-{self.ticks}",
+            "prompt": "what does the recent pyramid say?",
+            "answer": f"levels: +1={counts['+1']} 0={counts['0']} -1={counts['-1']}",
+            "ts": int(time.time()),
+        })
+        # Cross-link +1 back to the most recent 0/-1 shards it summarizes.
+        link_n = 0
+        for lvl in ("0", "-1"):
+            for p in list(store.iter_paths(lvl))[-3:]:
+                if store.link(meta_path, str(p)):
+                    link_n += 1
+        # 0 core fact: a crisp self-dialogue turn derived from this tick.
+        fact_path = store.add("0", {
+            "topic": f"node-fact-{self.ticks}",
+            "prompt": f"autonomous node observation #{self.ticks}",
+            "answer": f"node extended pyramid; +1 insight +{link_n} back-links",
+            "ts": int(time.time()),
+        })
+        # Auto-link the new 0 fact to related prior 0/-1 facts (self-connection).
+        auto_n = store.auto_link_recent(fact_path, "0", max_links=3)
+        auto_n += store.auto_link_recent(fact_path, "-1", max_links=2)
+        added = {
+            "plus1": meta_path,
+            "plus1_backlinks": link_n,
+            "zero": fact_path,
+            "zero_autolinks": auto_n,
+            "counts": counts,
+        }
+        return added
+
     def run_once(self) -> Dict[str, object]:
         """Single tick on demand (for tests / manual trigger)."""
         rep = self._tick()
         self._write(rep)
         return rep
+
+
+
+
 
 
 def run_supervisor_thread(office: Optional[Path] = None, cadence: float = 60.0) -> LearningNode:
