@@ -1014,6 +1014,14 @@ agent:
   # Recommended: 20-30 for focused tasks, 50-100 for open exploration
   max_turns: 500
 
+  # Multi-Function concurrency: max tool calls run in parallel within one
+  # agent turn (default null = built-in ceiling of 8). When the model emits
+  # several parallel-safe tool calls at once (read-only tools, non-overlapping
+  # file targets, opted-in MCP tools), Hermes runs them across this many
+  # worker threads. Raise on many-core machines to saturate CPU/IO-bound tools;
+  # lower to serialize more aggressively. Clamped to >= 1.
+  # max_concurrent_tool_calls: 8
+
   # Inactivity timeout for gateway agent runs (seconds, 0 = unlimited).
   # The agent can run indefinitely when actively calling tools or receiving
   # API responses.  Only fires after the agent has been idle for this duration.
@@ -1569,6 +1577,19 @@ delegation:
   #                                           # delegation.model to an inexpensive one — children carry the
   #                                           # vast majority of tokens, so this is where spend is cut while
   #                                           # planning quality stays with the frontier parent.
+
+# =============================================================================
+# Batch / Multi-Core Parallelism
+# =============================================================================
+# `hermes batch` runs a dataset of prompts across parallel OS processes — one
+# agent per worker. This is the Multi-Core path for dataset/bulk workloads.
+batch:
+  # Max parallel worker processes. null (default) = auto-detect CPU cores
+  # (capped at 16) so the run saturates the machine's cores instead of a
+  # hardcoded constant. --num_workers on the CLI overrides this. Raise past
+  # the auto cap on big boxes at your own API-cost risk (more parallel calls
+  # = more concurrent provider requests = higher rate-limit/cost pressure).
+  # max_workers: 8
 
 # =============================================================================
 # Honcho Integration (Cross-Session User Modeling)

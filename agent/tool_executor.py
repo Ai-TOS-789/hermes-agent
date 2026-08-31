@@ -266,11 +266,44 @@ def _image_generate_parallel_limit() -> int:
     return max(1, min(limit, _MAX_TOOL_WORKERS))
 
 
+def _config_max_concurrent_tool_calls() -> Optional[int]:
+    """Return the user-configured concurrent tool-call cap, or None to use the built-in ceiling.
+
+    Reads ``agent.max_concurrent_tool_calls`` from config.yaml. A non-positive
+    or non-integer value is ignored (falls back to ``_MAX_TOOL_WORKERS``) so a
+    misconfigured entry can never serialize the agent to a single worker or
+    crash the loop.
+    """
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config() or {}
+        agent_cfg = cfg.get("agent") if isinstance(cfg, dict) else None
+        value = agent_cfg.get("max_concurrent_tool_calls") if isinstance(agent_cfg, dict) else None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value >= 1 else None
+        if isinstance(value, str) and value.strip().isdigit():
+            v = int(value)
+            return v if v >= 1 else None
+    except Exception:
+        return None
+    return None
+
+
 def _max_workers_for_tool_batch(runnable_calls) -> int:
     """Return the worker cap for a concurrent tool batch."""
     if not runnable_calls:
         return 0
     max_workers = _MAX_TOOL_WORKERS
+    # User override from config.yaml (agent.max_concurrent_tool_calls) — the
+    # Multi-Function concurrency knob. When set, it replaces the built-in
+    # ceiling entirely (so many-core machines can exceed 8); out-of-range
+    # values are ignored by the reader and the default ceiling stands.
+    configured = _config_max_concurrent_tool_calls()
+    if configured is not None:
+        max_workers = configured
     if any(
         (call[2] if len(call) >= 3 else None) == "image_generate"
         for call in runnable_calls

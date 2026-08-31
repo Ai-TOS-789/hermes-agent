@@ -175,6 +175,15 @@ DEFAULT_CONFIG = {
         # api_modes — fixes the Gemini/Claude "stops after stating intent" case),
         # false (never), or a list of model-name substrings to match.
         "intent_ack_continuation": "auto",
+        # Max concurrent tool calls executed in a single agent turn. When the
+        # model emits several parallel-safe tool calls at once (read-only
+        # tools, non-overlapping file targets, opted-in MCP tools), Hermes runs
+        # them across this many worker threads simultaneously. This is the
+        # Multi-Function concurrency knob: raise it on many-core machines to
+        # saturate CPU/IO-bound tools, lower it to serialize more aggressively.
+        # null/absent = fall back to the built-in ceiling (agent/tool_executor.
+        # _MAX_TOOL_WORKERS, currently 8). Clamped to >= 1 at read time.
+        "max_concurrent_tool_calls": None,
         # Runtime anti-stall guards. When True (default), two conservative
         # guards run: (1) an identical-call loop breaker that appends a short
         # notice to the tool result when the same tool is called 3+ consecutive
@@ -2684,6 +2693,16 @@ DEFAULT_CONFIG = {
         # for restricted networks, audited environments, or air-gapped
         # systems where any runtime install is unacceptable.
         "allow_lazy_installs": True,
+    },
+
+    "batch": {
+        # Parallel worker cap for ``hermes batch`` / batch_runner.py. This is
+        # the Multi-Core knob for dataset/batch runs: each worker is a separate
+        # OS process running one agent prompt. null/absent = auto-detect CPU
+        # cores (capped at 16) so the run saturates the machine's cores instead
+        # of a hardcoded constant. --num_workers on the CLI overrides this.
+        # Raise it past the auto cap on big boxes at your own API-cost risk.
+        "max_workers": None,
     },
 
     "cron": {

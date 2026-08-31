@@ -581,7 +581,7 @@ class BatchRunner:
         base_url: str = None,
         api_key: str = None,
         model: str = "claude-opus-4-20250514",
-        num_workers: int = 4,
+        num_workers: int = None,
         verbose: bool = False,
         ephemeral_system_prompt: str = None,
         log_prefix_chars: int = 100,
@@ -631,6 +631,8 @@ class BatchRunner:
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
+        # None here means "auto-resolve at run() time" (CLI uses _resolve_num_workers;
+        # direct callers get the same core-aware default via _resolve_num_workers(None)).
         self.num_workers = num_workers
         self.verbose = verbose
         self.ephemeral_system_prompt = ephemeral_system_prompt
@@ -948,7 +950,11 @@ class BatchRunner:
         total_tool_stats = {}
         
         start_time = time.time()
-        
+
+        # Auto-resolve worker count if not explicitly set (core-aware default).
+        if self.num_workers is None:
+            self.num_workers = _resolve_num_workers(None)
+
         print(f"\n🔧 Initializing {self.num_workers} worker processes...")
         
         # Checkpoint writes happen in the parent process; keep a lock for safety.
@@ -1203,6 +1209,46 @@ class BatchRunner:
         print(f"   - Checkpoint: {self.checkpoint_file.name}")
 
 
+def _resolve_num_workers(explicit: Optional[int]) -> int:
+    """Resolve the parallel worker count for a batch run.
+
+    Priority:
+      1. Explicit ``--num_workers`` CLI flag (must be >= 1).
+      2. ``batch.max_workers`` from config.yaml (clamped to >= 1).
+      3. Auto-detected CPU count, so the run saturates the machine's
+         Multi-Core capacity instead of a hardcoded constant.
+    """
+    if explicit is not None:
+        return max(1, int(explicit))
+
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config() or {}
+        batch_cfg = cfg.get("batch") if isinstance(cfg, dict) else None
+        value = batch_cfg.get("max_workers") if isinstance(batch_cfg, dict) else None
+        if isinstance(value, bool):
+            value = None
+        if isinstance(value, int) and value >= 1:
+            return value
+        if isinstance(value, str) and value.strip().isdigit():
+            v = int(value)
+            if v >= 1:
+                return v
+    except Exception:
+        pass
+
+    # Fall back to CPU-core detection. Clamp to a sane ceiling so a 128-core
+    # box doesn't spawn 128 provider-parallel processes by default (that
+    # multiplies API cost + rate-limit pressure); the user can always raise
+    # it explicitly via --num_workers or batch.max_workers.
+    try:
+        cores = os.cpu_count() or 4
+    except Exception:
+        cores = 4
+    return max(1, min(cores, 16))
+
+
 def main(
     dataset_file: str = None,
     batch_size: int = None,
@@ -1212,7 +1258,7 @@ def main(
     api_key: str = None,
     base_url: str = "https://openrouter.ai/api/v1",
     max_turns: int = 10,
-    num_workers: int = 4,
+    num_workers: int = None,
     resume: bool = False,
     verbose: bool = False,
     list_distributions: bool = False,
@@ -1340,6 +1386,12 @@ def main(
         except Exception as e:
             print(f"❌ Error loading prefill messages: {e}")
             raise SystemExit(1)
+
+    # Resolve worker count. Explicit --num_workers wins; otherwise honor the
+    # batch.max_workers config knob; otherwise auto-detect CPU cores so the
+    # batch run saturates the machine's Multi-Core capacity instead of a
+    # hardcoded constant.
+    num_workers = _resolve_num_workers(num_workers)
 
     # Initialize and run batch runner
     try:
