@@ -35,10 +35,21 @@ import time
 from pathlib import Path
 
 _HERMES_HOME = Path(os.environ.get("HERMES_HOME", r"C:\Users\w3ce\AppData\Local\hermes"))
-_FORGE = _HERMES_HOME / "model_forge"
-_SIPHON_ROOT = _HERMES_HOME / "siphon_mesh"
-_SESSIONS = _HERMES_HOME / "sessions"
-_STATUS = _HERMES_HOME / "weight_stream_status.json"
+# Local Office: the disk-backed working root. Defaults to F: if present, else HOME.
+# All heavyweight artifacts (forge shards, mesh, block sync, logs) live here,
+# keeping them OFF the system drive and on the dedicated F: data disk.
+_OFFICE_ENV = os.environ.get("HERMES_OFFICE", "")
+_OFFICE = Path(_OFFICE_ENV) if _OFFICE_ENV else None
+if _OFFICE is None:
+    # Prefer the dedicated F: data drive when present; fall back to HOME.
+    _F = Path(r"F:/")
+    _OFFICE = (_F / "HermesOffice") if _F.exists() else (_HERMES_HOME / "HermesOffice")
+_FORGE = _OFFICE / "model_forge"
+_SIPHON_ROOT = _OFFICE / "siphon_mesh"
+_BLOCK_SYNC = _OFFICE / "block_sync"
+_SESSIONS = _HERMES_HOME / "sessions"  # Hy3 stream proxy stays in HOME (read-only source)
+_STATUS = _OFFICE / "weight_stream_status.json"
+_LOGS = _OFFICE / "logs"
 _TICK = 10  # seconds
 
 
@@ -92,7 +103,7 @@ def snapshot() -> dict:
         bal = 100.0 * (1.0 - abs(stream - disk) / denom)
     bal = max(0.0, min(100.0, bal))
     # 3-way handshake: keep the on-disk block EQUAL to the live Hy3 stream.
-    sync_root = _HERMES_HOME / "block_sync"
+    sync_root = _BLOCK_SYNC
     try:
         hs = three_way_sync(stream, sync_root)
     except Exception as e:  # fail-open: never crash the monitor
