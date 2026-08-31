@@ -175,6 +175,43 @@ DEFAULT_CONFIG = {
         # api_modes — fixes the Gemini/Claude "stops after stating intent" case),
         # false (never), or a list of model-name substrings to match.
         "intent_ack_continuation": "auto",
+        # Max concurrent tool calls executed in a single agent turn. When the
+        # model emits several parallel-safe tool calls at once (read-only
+        # tools, non-overlapping file targets, opted-in MCP tools), Hermes runs
+        # them across this many worker threads simultaneously. This is the
+        # Multi-Function concurrency knob: raise it on many-core machines to
+        # saturate CPU/IO-bound tools, lower it to serialize more aggressively.
+        # null/absent = fall back to the built-in ceiling (agent/tool_executor.
+        # _MAX_TOOL_WORKERS, currently 8). Clamped to >= 1 at read time.
+        "max_concurrent_tool_calls": None,
+        # Self-learning loop: after each agent turn, record the turn's outcome
+        # (success/latency/token cost/user corrections) and periodically run a
+        # Simulated-Annealing pass that tunes advisory behavioral parameters
+        # (memory-nudge interval, review cadence, tool concurrency, compression
+        # aggressiveness). Purely advisory — the tuned profile is persisted and the
+        # agent may adopt it; nothing is forced. Disabled by default to keep the
+        # core path untouched until explicitly opted in.
+        "self_learning": {"enabled": False},
+        # Sensory / cognitive layer (agent/sensory_system.py): a structured
+        # perception stage between raw tool input and the reasoning loop — the
+        # "nervous system" Hermes previously lacked. AOT-compiles a pipeline
+        # (PerceptionBuffer -> SalienceFilter -> WorkingMemory) and JIT-runs it
+        # per turn. Opt-in; off by default.
+        "sensory": {
+            "enabled": False,
+            # Which sensory modalities are active. "all" or a list subset of
+            # text/audio/vision/state/tactile/proprioception.
+            "modalities": "all",
+            # Per-modality importance weights (0..1+); default weights apply if
+            # a modality is omitted.
+            "weights": {},
+            # Minimum salience for a stimulus to reach working memory (thalamic
+            # gate). Higher = only the most salient signals get attended.
+            "salience_threshold": 0.25,
+            # Bounded memory capacities.
+            "buffer_capacity": 64,
+            "working_memory_capacity": 8,
+        },
         # Runtime anti-stall guards. When True (default), two conservative
         # guards run: (1) an identical-call loop breaker that appends a short
         # notice to the tool result when the same tool is called 3+ consecutive
@@ -2686,6 +2723,16 @@ DEFAULT_CONFIG = {
         "allow_lazy_installs": True,
     },
 
+    "batch": {
+        # Parallel worker cap for ``hermes batch`` / batch_runner.py. This is
+        # the Multi-Core knob for dataset/batch runs: each worker is a separate
+        # OS process running one agent prompt. null/absent = auto-detect CPU
+        # cores (capped at 16) so the run saturates the machine's cores instead
+        # of a hardcoded constant. --num_workers on the CLI overrides this.
+        # Raise it past the auto cap on big boxes at your own API-cost risk.
+        "max_workers": None,
+    },
+
     "cron": {
         # Allow cron-spawned agents to use the cronjob toolset (create/edit/
         # remove scheduled jobs from within a cron run — the "cron-librarian"
@@ -3561,6 +3608,18 @@ DEFAULT_CONFIG = {
         # upstream installer is not appropriate for the machine, for example
         # on non-admin accounts where `/Applications` is not writable.
         "refresh_cua_driver": True,
+        # Automatic update: run `hermes update --yes` on a schedule so the agent
+        # stays current without manual intervention. This is the user-facing
+        # toggle for the automation in scripts/hermes_auto_update.py.
+        #   "off"      — no automatic updates (default; you update manually).
+        #   "daily"    — check & apply once per day.
+        #   "weekly"   — check & apply once per week.
+        # When enabled, the updater snapshots our core patches (update-guard
+        # `pre`) before pulling and reconciles them afterward (`post`), so the
+        # self-learning / multi-core edits survive the upgrade.
+        "auto_update": "off",
+        # Hour-of-day (local, 0-23) the daily/weekly auto-update prefers to run.
+        "auto_update_hour": 4,
     },
 
     # Language Server Protocol — semantic diagnostics from real

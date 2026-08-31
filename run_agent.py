@@ -1970,6 +1970,19 @@ class AIAgent:
         except Exception:
             finish_background_review_run(self, review_run)
             raise
+        # Closed-loop self-learning: after each review cadence, record this turn's
+        # outcome and (throttled) run one SA tuning pass. Isolated + fail-open so a
+        # learning-subsystem fault can never break the core review path.
+        try:
+            self._self_learning_observe()
+        except Exception as _sl_exc:  # pragma: no cover - defensive
+            logger.debug("self-learning observe skipped: %s", _sl_exc)
+        # Sensory/cognitive layer: build this turn's perception frame (AOT/JIT
+        # pipeline). Fail-open, mirrors self-learning.
+        try:
+            self._sensory_perceive()
+        except Exception as _sens_exc:  # pragma: no cover - defensive
+            logger.debug("sensory perceive skipped: %s", _sens_exc)
 
     def _build_memory_write_metadata(
         self,
@@ -1988,6 +2001,127 @@ class AIAgent:
             task_id=task_id,
             tool_call_id=tool_call_id,
         )
+
+    def _sensory_perceive(self) -> None:
+        """Build this turn's perception frame via the sensory/cognitive layer.
+
+        Collects available stimuli from the environment (state signals, any
+        attached image/audio, session health) and routes them through the
+        compiled SensorySystem (AOT pipeline: PerceptionBuffer -> SalienceFilter
+        -> WorkingMemory). Fail-open: if anything raises, the agent simply
+        proceeds without a perception frame.
+        """
+        from agent import sensory_system as _ss
+
+        # Opt-in config switch (agent.sensory.enabled), mirroring self-learning.
+        try:
+            from hermes_cli.config import load_config_readonly
+            from utils import is_truthy_value
+
+            cfg = load_config_readonly() or {}
+            agent_cfg = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+            s_cfg = agent_cfg.get("sensory") if isinstance(agent_cfg.get("sensory"), dict) else {}
+            if not is_truthy_value(s_cfg.get("enabled"), default=False):
+                return
+        except Exception:
+            return
+
+        try:
+            eng = _ss.get_engine()
+            eng.compile(cfg.get("sensory") if isinstance(cfg.get("sensory"), dict) else {})
+
+            stimuli: list = []
+            # Proprioception: own subagents / concurrency / token pressure.
+            subagents = int(getattr(self, "_active_subagent_count", 0) or 0)
+            if subagents:
+                stimuli.append(_ss.Stimulus(
+                    modality="proprioception",
+                    payload=f"{subagents} active subagents",
+                    source="agent",
+                    meta={"novel": subagents > 2},
+                ))
+            # State: pet / session health signals if present.
+            pet_state = _ss._HERMES_HOME / "pet_state.json"
+            if pet_state.is_file():
+                try:
+                    import json as _json
+                    ps = _json.loads(pet_state.read_text(encoding="utf-8", errors="replace"))
+                    stimuli.append(_ss.Stimulus(
+                        modality="state",
+                        payload=ps.get("state", "idle"),
+                        source="pet_state",
+                        meta={"error": ps.get("state") == "error"},
+                    ))
+                except Exception:
+                    pass
+            # Tactile: any UI affordance flagged this turn (drag/focus events).
+            if getattr(self, "_last_ui_event", None):
+                stimuli.append(_ss.Stimulus(
+                    modality="tactile",
+                    payload=self._last_ui_event,
+                    source="ui",
+                ))
+
+            if stimuli:
+                frame = eng.perceive(stimuli)
+                logger.debug("sensory frame turn %s: %s", frame.turn_id, frame.summary)
+        except Exception as _sens_exc:  # pragma: no cover - defensive
+            logger.debug("sensory perceive skipped: %s", _sens_exc)
+        """Record this turn's outcome into the self-learning engine (closed loop).
+
+        Pulls observable signals off the agent (success/corrections from the last
+        turn, a rough latency + token cost) and feeds them to
+        ``agent.self_learning``. Throttles the expensive SA pass to every Nth
+        observation. Fail-open: any exception is swallowed by the caller.
+        """
+        from agent import self_learning
+
+        # Respect the opt-in config switch (agent.self_learning.enabled).
+        try:
+            from hermes_cli.config import load_config_readonly
+            from utils import is_truthy_value
+
+            cfg = load_config_readonly() or {}
+            agent_cfg = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+            sl_cfg = agent_cfg.get("self_learning") if isinstance(agent_cfg.get("self_learning"), dict) else {}
+            if not is_truthy_value(sl_cfg.get("enabled"), default=False):
+                return
+        except Exception:
+            return  # fail-safe: if we can't read config, don't learn
+
+        engine = self_learning.get_engine()
+        if engine is None:
+            return
+
+        # Pull observable signals; default to neutral when unavailable.
+        turn_id = str(getattr(self, "session_id", "x") or "x")
+        corrections = int(getattr(self, "_user_turn_redirects", 0) or 0)
+        # Latency: wall-clock since the turn started, if the agent tracks it.
+        start_ts = getattr(self, "_turn_start_ts", None)
+        latency_ms = (time.time() - start_ts) * 1000.0 if start_ts else 0.0
+        # Cost proxy: total tokens this session (cheap to read).
+        token_cost = float(getattr(self, "_api_total_tokens", 0) or 0)
+        # Success: no terminal error this turn.
+        success = not bool(getattr(self, "_turn_had_error", False))
+
+        engine.observe(
+            turn_id,
+            success=success,
+            latency_ms=max(0.0, latency_ms),
+            token_cost=token_cost,
+            user_corrections=corrections,
+            notes="auto-post-turn",
+        )
+
+        # Throttle SA: only tune every 20 observations (each eval = real history
+        # scan; we never want the tuner to dominate the agent's own work).
+        obs_count = getattr(self, "_self_learn_obs", 0) + 1
+        self._self_learn_obs = obs_count
+        if obs_count % 20 == 0:
+            try:
+                engine.tune_once(iterations=60)
+            except Exception as _tune_exc:  # pragma: no cover - defensive
+                logger.debug("self-learning tune skipped: %s", _tune_exc)
 
     def _apply_persist_user_message_override(self, messages: List[Dict]) -> None:
         """Rewrite the current-turn user message before persistence/return.
