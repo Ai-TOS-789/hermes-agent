@@ -71,16 +71,19 @@ class PyramidStore:
         for lvl in PYRAMID_LEVELS:
             (self.root / lvl).mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._seq: Dict[str, int] = {l: 0 for l in PYRAMID_LEVELS}
+        self._seq: Dict[str, int] = {l: len(list((self.root / l).glob("*.jsonl"))) for l in PYRAMID_LEVELS}
 
-    def add(self, level: str, record: dict) -> str:
+    def add(self, level: str, record: dict, links: Optional[List[str]] = None) -> str:
         if level not in PYRAMID_LEVELS:
             level = "0"
         with self._lock:
-            seq = self._seq[level]
+            path = self.root / level / f"{self._seq[level]:08d}.jsonl"
             self._seq[level] += 1
-        path = self.root / level / f"{seq:08d}.jsonl"
-        path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        rec = dict(record)
+        rec["level"] = level
+        rec["links"] = list(links or [])
+        rec["_id"] = str(path)
+        path.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
         return str(path)
 
     def count(self, level: Optional[str] = None) -> int:
@@ -94,6 +97,83 @@ class PyramidStore:
                 yield json.loads(p.read_text(encoding="utf-8"))
             except Exception:
                 continue
+
+    def iter_paths(self, level: str):
+        """Yield shard file paths for ONE level (sorted)."""
+        yield from sorted((self.root / level).glob("*.jsonl"))
+
+    def _read(self, path: str) -> Optional[dict]:
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def link(self, path_a: str, path_b: str) -> bool:
+        """Bidirectionally cross-link two shard records (any pyramid level).
+
+        A link records the *other* shard's path in each record's ``links`` list, so
+        Hermes can walk the pyramid: a +1 insight can point back to the 0/-1 shards it
+        was synthesized from, and a 0 core fact can point to related prior facts.
+        """
+        ra, rb = self._read(path_a), self._read(path_b)
+        if ra is None or rb is None:
+            return False
+        pa, pb = Path(path_a), Path(path_b)
+        ra.setdefault("links", [])
+        rb.setdefault("links", [])
+        if str(pb) not in ra["links"]:
+            ra["links"].append(str(pb))
+        if str(pa) not in rb["links"]:
+            rb["links"].append(str(pa))
+        pa.write_text(json.dumps(ra, ensure_ascii=False), encoding="utf-8")
+        pb.write_text(json.dumps(rb, ensure_ascii=False), encoding="utf-8")
+        return True
+
+    def auto_link_recent(self, path: str, other_level: str, max_links: int = 3) -> int:
+        """Link ``path`` to up to ``max_links`` recent records in ``other_level`` that
+        share token overlap (topic/tags/prompt/answer). Lets the node *connect* new
+        knowledge to related prior knowledge on its own. Returns link count."""
+        rec = self._read(path)
+        if not rec:
+            return 0
+        keys = _record_tokens(rec)
+        if not keys:
+            return 0
+        cands = list(self.iter_paths(other_level))[-50:]
+        scored = []
+        for cp in cands:
+            if str(cp) == str(path):
+                continue
+            c = self._read(str(cp))
+            if not c:
+                continue
+            overlap = sum(1 for k in keys if k in _record_text(c))
+            if overlap:
+                scored.append((overlap, str(cp)))
+        scored.sort(reverse=True)
+        n = 0
+        for _, cid in scored[:max_links]:
+            if self.link(path, cid):
+                n += 1
+        return n
+
+
+def _record_tokens(rec: dict) -> set:
+    keys: set = set()
+    for f in ("topic", "tags", "prompt", "answer"):
+        v = rec.get(f)
+        if isinstance(v, str):
+            keys.update(w for w in v.lower().split() if len(w) > 3)
+        elif isinstance(v, list):
+            keys.update(str(t).lower() for t in v if len(str(t)) > 3)
+    return keys
+
+
+def _record_text(rec: dict) -> str:
+    return " ".join(str(rec.get(k, "")) for k in ("topic", "tags", "prompt", "answer")).lower()
+
+
+
 
 
 # ── DiskModelIndex: map a model artifact to on-disk shards ───────────────────
