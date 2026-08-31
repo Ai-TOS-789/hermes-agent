@@ -113,6 +113,17 @@ class LearningNode:
             report["self_learning"] = "ok"
         except Exception as e:  # noqa: BLE001
             report["self_learning_error"] = str(e)
+        # 4) Option-Skills discovery — suggest (never auto-install) skills the repo
+        #    ships but the session hasn't activated yet. Report-only, guardrail-gated.
+        try:
+            from agent.option_skills import discover_once
+            rep = discover_once()
+            report["option_skills"] = {
+                "suggestions": rep.get("suggestions", {}),
+                "active_count": sum(len(v) for v in rep.get("active", {}).values()),
+            }
+        except Exception as e:  # noqa: BLE001
+            report["option_skills_error"] = str(e)
         self.ticks += 1
         report["ticks"] = self.ticks
         return report
