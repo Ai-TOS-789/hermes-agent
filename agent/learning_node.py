@@ -166,3 +166,30 @@ def run_supervisor_thread(office: Optional[Path] = None, cadence: float = 60.0) 
     node = LearningNode(office=office, cadence=cadence)
     node.start()
     return node
+
+
+# ── Multi-process worker harness (Phase 0 of the Desktop/Option-Skills plan) ──
+import multiprocessing as _mp
+
+
+def run_worker(func, *args, office=None):
+    """Spawn ``func(*args)`` as a supervised, daemonized child PROCESS.
+
+    Used so the Option-Skills conductor, research loop, and discovery loop each run
+    in their own process (multi-process isolation) under the learning node's wing.
+    Returns the live Process so callers can join/wait if needed.
+    """
+    p = _mp.Process(target=func, args=args, name="hermes-worker", daemon=True)
+    p.start()
+    return p
+
+
+def run_supervisor_processes(office=None, cadence=60.0):
+    """Conductor entry: launch the discover + research workers as separate processes."""
+    from agent import option_skills as _osk
+    root = office or _OFFICE
+    procs = [
+        run_worker(_osk.discover_loop, root, cadence),
+        run_worker(_osk.research_loop, root, cadence),
+    ]
+    return procs
