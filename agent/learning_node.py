@@ -88,15 +88,17 @@ class LearningNode:
             if self.harvest_fn is not None:
                 report["harvested"] = self.harvest_fn()
             else:
-                # Default: turn the observed session stream into a self-dialogue
-                # turn log and persist it to the pyramid store on disk.
+                # No external stream wired: do NOT fabricate a fake shard every tick
+                # (that just spams the pyramid). Instead, harvest only if a real
+                # self-dialogue source file exists, else skip silently.
                 from agent.model_forge import harvest_self_dialogue
-                report["harvested"] = harvest_self_dialogue(
-                    [{
-                        "prompt": f"hy3_stream_observation@{int(time.time())}",
-                        "answer": f"autonomous node harvested self-dialogue turn #{self.ticks}",
-                    }]
-                )
+                src = self.office / "self_dialogue.jsonl"
+                if src.is_file():
+                    turns = [json.loads(l) for l in src.read_text(encoding="utf-8").splitlines() if l.strip()]
+                    if turns:
+                        report["harvested"] = harvest_self_dialogue(turns)
+                else:
+                    report["harvested"] = 0
         except Exception as e:  # noqa: BLE001
             report["harvest_error"] = str(e)
         # 1b) SELF-EXTEND: synthesize a +1 meta/insight from recent 0/-1 shards, AND
@@ -106,7 +108,11 @@ class LearningNode:
         try:
             from agent.model_forge import PyramidStore
             store = PyramidStore()
-            synth = self._synthesize_and_link(store)
+            # Wire a real Hy3 summarizer if the runtime exposes one; otherwise the
+            # compact fallback (recent prompt/answer concat) is used. This makes the
+            # +1 shard real learning rather than a bare count.
+            summarize_fn = self._hy3_summarize() if self._hy3_summarize() else None
+            synth = self._synthesize_and_link(store, summarize_fn=summarize_fn)
             report["synthesized"] = synth
         except Exception as e:  # noqa: BLE001
             report["synthesize_error"] = str(e)
@@ -243,6 +249,28 @@ class LearningNode:
             "summary": summary[:200],
         }
         return added
+
+
+    def _hy3_summarize(self):
+        """Return a Hy3-backed summarizer callable, or None if unavailable.
+
+        Best-effort: if the runtime can call the live model, summarize recent shards
+        into a natural-language +1 insight. Otherwise return None and the node falls
+        back to the compact concat summary (still real data, no fabrication).
+        """
+        try:
+            from hermes_tools import chat_completion
+            def _sum(recent_lines):
+                prompt = ("Summarize the following agent observations into one concise "
+                          "insight (1-2 sentences):\n" + "\n".join(recent_lines))
+                try:
+                    resp = chat_completion(prompt, max_tokens=120)
+                    return resp.strip()
+                except Exception:
+                    return None
+            return _sum
+        except Exception:
+            return None
 
 
     def run_once(self) -> Dict[str, object]:

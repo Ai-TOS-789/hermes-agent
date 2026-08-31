@@ -54,22 +54,55 @@ def hermes_alive(office: Path | None = None, stall: int = _STALL_SECONDS) -> boo
     return False
 
 
+def _revive_conductor(office: Path) -> bool:
+    """Bring the Option-Skills conductor workers back up if they are not running.
+
+    This is NOT a forced restart of Hermes itself (that must still go through the
+    Update menu per the user's rule). It only re-launches the supervised conductor
+    workers so the autonomous learning/option-skills system self-recovers ("if it
+    drops, pop itself back up"). Fails silently if it cannot spawn.
+    """
+    try:
+        repo = Path(__file__).resolve().parent.parent
+        script = repo / "scripts" / "hermes_autostart.py"
+        if not script.is_file():
+            return False
+        # Launch detached so it survives this watchdog's lifetime.
+        subprocess.Popen(
+            [sys.executable, str(script), "run"],
+            cwd=str(repo),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+        )
+        return True
+    except Exception:
+        return False
+
+
 def self_heal(office: Path | None = None) -> dict:
-    """One watchdog pass. If Hermes stalled, DO NOT force-restart it (per the rule:
-    a reboot/update must go through the Update menu, never an automatic forced
-    restart). Instead report the stall so the human can act via the menu.
+    """One watchdog pass.
+
+    If Hermes stalled: do NOT force-restart Hermes itself (a reboot/update must go
+    through the Update menu). Instead, per the user's later directive ("if it drops,
+    pop itself back up"), re-launch the supervised conductor workers so the
+    autonomous systems recover on their own, and record the event.
 
     Returns what it observed."""
     if hermes_alive(office):
         return {"action": "ok", "alive": True}
-    # Stalled: raise a visible signal and let the human reboot via the Update menu.
+    # Stalled: revive the supervised workers (not a forced Hermes restart), and
+    # record that we auto-recovered so the human stays informed.
+    revived = _revive_conductor(Path(office) if office else _OFFICE)
     try:
         _OFFICE_STATUS = (Path(office) if office else _OFFICE) / "tray_stall.json"
         _OFFICE_STATUS.write_text(json.dumps({
             "state": "STALLED",
             "ts": int(time.time()),
-            "note": "Hermes stalled — awaiting human reboot via Update menu (no auto-restart)",
+            "auto_revived_conductor": revived,
+            "note": "Hermes stalled — conductor workers auto-revived; full reboot still via Update menu",
         }, indent=2), encoding="utf-8")
     except Exception:
         pass
-    return {"action": "stalled-awaiting-human", "alive": False}
+    return {"action": "stalled-auto-revived" if revived else "stalled-awaiting-human",
+            "alive": False, "revived": revived}

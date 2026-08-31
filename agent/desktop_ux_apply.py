@@ -22,7 +22,14 @@ import os as _os
 
 _REPO = Path(__file__).resolve().parent.parent
 _SKILL = _REPO / "skills" / "desktop-ux" / "SKILL.md"
-_DESKTOP_THEMES = _REPO / "apps" / "desktop" / "src" / "themes"
+# Generated theme goes to the Local Office (F:/HermesOffice/themes), NOT into the
+# repo's apps/desktop source tree — keeps generated artifacts out of version control
+# noise and lets the human copy it into the renderer when they approve.
+_OFFICE = Path(_os.environ.get("HERMES_OFFICE", "")) or (
+    Path(r"F:/HermesOffice") if Path(r"F:/").exists()
+    else Path(_os.environ.get("HERMES_HOME", r"C:\Users\w3ce\AppData\Local\hermes")) / "HermesOffice"
+)
+_DESKTOP_THEMES = _OFFICE / "themes"
 
 
 # Curated token table distilled from the skill file (kept in code so this module
