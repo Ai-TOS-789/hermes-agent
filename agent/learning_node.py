@@ -176,24 +176,46 @@ class LearningNode:
         if self._thread:
             self._thread.join(timeout=5.0)
 
-    def _synthesize_and_link(self, store: "object") -> dict:
+    def _synthesize_and_link(self, store: "object", summarize_fn=None) -> dict:
         """Self-extend the pyramid on the node's own initiative.
 
-        - Adds a 0 core fact from the current tick (if any derived content exists).
-        - Synthesizes a +1 meta/insight summarizing recent 0/-1 shard counts.
+        - Adds a 0 core fact from the current tick.
+        - Synthesizes a +1 meta/insight. If ``summarize_fn`` is supplied (e.g. a Hy3
+          call), it produces a NATURAL-LANGUAGE summary of recent 0/-1 shards so the
+          +1 shard is real learning, not just a count. Without it, a compact summary
+          of recent prompts/answers is used.
         - Auto-links the +1 insight back to recent 0/-1 shards it summarizes.
-        - Auto-links a recent 0 fact to related prior 0/-1 facts by token overlap.
+        - Auto-links the new 0 fact to related prior 0/-1 facts by keyword-cluster
+          overlap (semantic-ish, no embeddings needed).
         Returns a summary of what was added/linked.
         """
-        import json as _json
         added = {}
-        # +1 meta/insight from current counts.
         counts = {l: store.count(l) for l in ("+1", "0", "-1")}
+        # Gather recent 0/-1 content to summarize into a +1 insight.
+        recent = []
+        for lvl in ("0", "-1"):
+            for p in list(store.iter_paths(lvl))[-5:]:
+                try:
+                    rec = json.loads(Path(p).read_text(encoding="utf-8"))
+                    recent.append(f"[{lvl}] {rec.get('prompt','')[:120]} -> {rec.get('answer','')[:120]}")
+                except Exception:
+                    continue
+        if summarize_fn is not None and recent:
+            try:
+                summary = summarize_fn(recent)
+            except Exception:
+                summary = None
+        else:
+            summary = None
+        if not summary:
+            summary = (f"levels: +1={counts['+1']} 0={counts['0']} -1={counts['-1']}; "
+                       f"recent: {' | '.join(recent[-3:])}" if recent else
+                       f"levels: +1={counts['+1']} 0={counts['0']} -1={counts['-1']}")
         meta_path = store.add("+1", {
             "type": "synthesized-insight",
             "topic": f"autonomous-tick-{self.ticks}",
             "prompt": "what does the recent pyramid say?",
-            "answer": f"levels: +1={counts['+1']} 0={counts['0']} -1={counts['-1']}",
+            "answer": summary,
             "ts": int(time.time()),
         })
         # Cross-link +1 back to the most recent 0/-1 shards it summarizes.
@@ -218,8 +240,10 @@ class LearningNode:
             "zero": fact_path,
             "zero_autolinks": auto_n,
             "counts": counts,
+            "summary": summary[:200],
         }
         return added
+
 
     def run_once(self) -> Dict[str, object]:
         """Single tick on demand (for tests / manual trigger)."""

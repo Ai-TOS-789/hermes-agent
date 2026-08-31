@@ -1,12 +1,46 @@
 #!/usr/bin/env python3
-"""Thin, dependency-free web-search shim (used by the research loop).
+"""Web + image search for the research loop.
 
-If the runtime exposes a `hermes_tools.web_search` helper it is used; otherwise we
-degrade to an empty result so the research loop keeps running offline (and stays
-testable). We never raise from here — research is best-effort.
+Resolution order (best-effort, never raises):
+1. If the runtime exposes ``hermes_tools.web_search``, use it.
+2. Else fall back to a lightweight urllib query against DuckDuckGo Lite (no API key,
+   no extra deps) so research_loop actually retrieves references on this machine.
+
+Only URLs/notes are returned — never executed as code (security + YAGNI).
 """
 
 from __future__ import annotations
+
+import json
+import re
+import urllib.parse
+import urllib.request
+from html import unescape
+
+
+def _ddg_lite(query: str, limit: int = 5) -> list:
+    try:
+        q = urllib.parse.quote(query)
+        url = f"https://lite.duckduckgo.com/lite/?q={q}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (research)"})
+        html = urllib.request.urlopen(req, timeout=12).read().decode("utf-8", "ignore")
+        # DDG Lite results: <a class="result-link" href="...">title</a>
+        rows = re.findall(r'<a[^>]*class="result-link"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', html, re.S)
+        hits = []
+        for href, title in rows[:limit]:
+            hits.append({
+                "url": unescape(href),
+                "title": re.sub(r"<[^>]+>", "", unescape(title)).strip(),
+                "description": "",
+            })
+        # Fallback to any href containing http if the class selector missed.
+        if not hits:
+            for href in re.findall(r'href="(https?://[^"]+)"', html)[:limit]:
+                if "duckduckgo" not in href:
+                    hits.append({"url": href, "title": "", "description": ""})
+        return hits
+    except Exception:
+        return []
 
 
 def search(query: str, limit: int = 5) -> list:
@@ -14,9 +48,12 @@ def search(query: str, limit: int = 5) -> list:
     try:
         from hermes_tools import web_search
         data = web_search(query, limit=limit)
-        return data.get("data", {}).get("web", []) or []
+        hits = data.get("data", {}).get("web", []) or []
+        if hits:
+            return hits
     except Exception:
-        return []
+        pass
+    return _ddg_lite(query, limit)
 
 
 def search_images(query: str, limit: int = 5) -> list:
@@ -24,6 +61,10 @@ def search_images(query: str, limit: int = 5) -> list:
     try:
         from hermes_tools import web_search
         data = web_search(query, limit=limit)
-        return data.get("data", {}).get("images", []) or []
+        imgs = data.get("data", {}).get("images", []) or []
+        if imgs:
+            return imgs
     except Exception:
-        return []
+        pass
+    # Images via DDG Lite with image-ish query; reuse same endpoint for refs.
+    return _ddg_lite(f"{query} image reference", limit)
