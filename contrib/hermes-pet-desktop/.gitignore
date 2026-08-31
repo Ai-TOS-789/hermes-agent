@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Pet state emitted at runtime
+pet_state.json
+pet_state.json.tmp
+
+# OS cruft
+.DS_Store
+Thumbs.db
