@@ -138,6 +138,21 @@ def main() -> int:
         return cmd_trust_off()
     if action == "stop":
         return cmd_stop()
+    if action == "conduct":
+        # Phase 5: launch the Option-Skills conductor (discover + research workers)
+        # as supervised multi-process workers under the learning node's wing.
+        from agent.learning_node import run_supervisor_processes
+        procs = run_supervisor_processes(office=_OFFICE)
+        for p in procs:
+            print(f"[conduct] started worker pid={p.pid} name={p.name}")
+        print(f"[conduct] {len(procs)} worker(s) running under guardrail; Ctrl-C to stop.")
+        try:
+            for p in procs:
+                p.join()
+        except KeyboardInterrupt:
+            for p in procs:
+                p.terminate()
+        return 0
     return cmd_once()
 
 
